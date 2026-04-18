@@ -2,10 +2,12 @@ import json
 import multiprocessing as mp
 import os
 import subprocess
-import sys
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
+np.random.seed(400)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -25,7 +27,6 @@ from plots import (
 )
 
 IS_2I2C = "jovyan" in f"{Path('~').expanduser()}"
-sys.path.append("/ngen/pyngiab")
 
 
 def update_parameters(file_path, param_updates, model_type_name):
@@ -38,29 +39,6 @@ def update_parameters(file_path, param_updates, model_type_name):
             break
     with open(file_path, "w") as f:
         json.dump(realization, f, indent=4)
-
-
-def update_snow_emis(value):
-    """
-    Update selected NOAH LSM parameters in the MPTABLE.TBL file.
-
-    Parameters:
-        directory_path (str): Path to the 'noah_om/parameters' directory.
-        param_updates (dict): Keys are parameter names (e.g., 'MFSNO'), values are strings to insert.
-    """
-    file_path = Path("data/gage-10109001/config/MPTABLE.TBL")
-    if not file_path.exists():
-        raise FileNotFoundError(f"MPTABLE.TBL not found at {file_path}")
-
-    with open(file_path, "r") as file:
-        lines = file.readlines()
-
-        for i, line in enumerate(lines):
-            if line.strip().startswith("SNOW_EMIS"):
-                lines[i] = f"  SNOW_EMIS     = {value}\n"
-
-    with open(file_path, "w") as file:
-        file.writelines(lines)
 
 
 # === Utility Function to Retrieve and Preprocess USGS Streamflow ===
@@ -129,7 +107,6 @@ class NextGenSetup:
             "MFSNO": params[11],  # Pass float directly
             "MP": params[12],
             "RSURF_EXP": params[13],
-            # "SNOW_EMIS": params[11],
             "CWP": params[14],
             "VCMX25": params[15],
             "RSURF_SNOW": params[16],
@@ -137,7 +114,6 @@ class NextGenSetup:
         }
 
         update_parameters(self.realization_path, noah_param_updates, "NoahOWP")
-        # update_snow_emis(params[11])
 
     def run_model(self, data_dir):
         troute_output_folder = Path(data_dir) / "outputs" / "troute"
@@ -175,24 +151,23 @@ class SpotpySetup:
     # CFE model parameters
     soil_params_b = Uniform(2.0, 15.0, optguess=4.05)
     satpsi = Uniform(0.03, 0.955, optguess=0.355)
-    satdk = Uniform(0.0000001, 0.000726, optguess=0.00000338)  # hit min
-    maxsmc = Uniform(0.16, 0.59, optguess=0.439)  # hit max set to 0.8
-    refkdt = Uniform(0.1, 4.0, optguess=1.0)  ######new
+    satdk = Uniform(0.0000001, 0.000726, optguess=0.00000338)
+    maxsmc = Uniform(0.16, 0.59, optguess=0.439)
+    refkdt = Uniform(0.1, 4.0, optguess=1.0)
     expon = Uniform(1.0, 8.0, optguess=3.0)
     slope = Uniform(0.0, 1.0, optguess=0.1)
-    max_gw_storage = Uniform(0.01, 0.25, optguess=0.05)  ######### new
+    max_gw_storage = Uniform(0.01, 0.25, optguess=0.05)
     K_nash_subsurface = Uniform(0.0, 1.0, optguess=0.03)
     K_lf = Uniform(0.0, 1.0, optguess=0.01)
     Cgw = Uniform(0.0000018, 0.0018, optguess=0.000018)
 
     # # Additional NOAH OWP Modular parameters
     MFSNO = Uniform(0.5, 4.0, optguess=2.0)  # multiplier on snowfall melt factor
-    MP = Uniform(3.6, 12.6, optguess=9.0)  # hit max
-    RSURF_EXP = Uniform(1.0, 6.0, optguess=5.0)  # hit max
-    # SNOW_EMIS = Uniform(0.90, 1.0)  # snow emissivity
+    MP = Uniform(3.6, 12.6, optguess=9.0)
+    RSURF_EXP = Uniform(1.0, 6.0, optguess=5.0)
     CWP = Uniform(0.09, 0.36, optguess=0.18)
     VCMX25 = Uniform(24.0, 112.0, optguess=52.2)
-    RSURF_SNOW = Uniform(0.136, 100.0, optguess=50.0)  # hit min
+    RSURF_SNOW = Uniform(0.136, 100.0, optguess=50.0)
     SCAMAX = Uniform(0.7, 1.0, optguess=0.9)
 
     def __init__(
@@ -231,7 +206,6 @@ class SpotpySetup:
             "MFSNO",
             "MP",
             "RSURF_EXP",
-            # "SNOW_EMIS",
             "CWP",
             "VCMX25",
             "RSURF_SNOW",
@@ -392,22 +366,11 @@ def run_spotpy(
 
     invert_objective = best_is_higher != algorithm_maximizes
 
-    # if best_is_higher and not algorithm_maximizes:
-    #     invert_objective = True
-    # elif best_is_higher and algorithm_maximizes:
-    #     invert_objective = False
-    # elif not best_is_higher and algorithm_maximizes:
-    #     invert_objective = True
-    # elif not best_is_higher and not algorithm_maximizes:
-    #     invert_objective = False
-
     # Set up TensorBoard writer
     if tensorboard_logdir is None:
         tensorboard_logdir = f"{data_dir}/tensorboard_logs"
 
-    run_name = (
-        f"{algorithm}_{objective_function}_{gage_id}_old_parm_{datetime.now().strftime('%H_%M')}"
-    )
+    run_name = f"{gage_id}_{algorithm}_{objective_function}_{datetime.now().strftime('%H_%M')}"
     writer = SummaryWriter(log_dir=f"{tensorboard_logdir}/{run_name}")
 
     # Log hyperparameters
@@ -428,18 +391,18 @@ def run_spotpy(
     optimizer = SpotpySetup(
         model_setup, data_dir, feature_id, invert_objective, obj_func, writer, objective_function
     )
-    db_name = f"{optimizer.output_dir}/spotpy_results_{algorithm}_{objective_function}"
+    db_name = f"spotpy_db_{gage_id}_{algorithm}_{objective_function}"
 
     # SCE hyperparameters
     if algorithm == "SCE":
-        sampler = spotpy.algorithms.sceua(optimizer, dbname=db_name, dbformat="csv")
+        sampler = spotpy.algorithms.sceua(optimizer, dbname=db_name, dbformat="ram")
 
     elif algorithm == "DDS":
-        sampler = spotpy.algorithms.dds(optimizer, dbname=db_name, dbformat="csv")
+        sampler = spotpy.algorithms.dds(optimizer, dbname=db_name, dbformat="ram")
         sampler.sample(repetitions, trials=int(dds_trials))
 
-    # results = sampler.getdata()
-    results = spotpy.analyser.load_csv_results(db_name)
+    results = sampler.getdata()
+    # results = spotpy.analyser.load_csv_results(db_name)
 
     # Final results to TensorBoard
     best_params = spotpy.analyser.get_best_parameterset(results, maximize=best_is_higher)

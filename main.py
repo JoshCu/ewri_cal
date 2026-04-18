@@ -2,7 +2,11 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
+
 from cal_utils import process_usgs_streamflow, run_spotpy
+
+np.random.seed(400)
 
 
 def get_troute_output_name(path):
@@ -16,7 +20,6 @@ gage_id = "10154200"
 start_date = "2007-10-01"
 end_date = "2009-09-30"
 training_start_date = "2008-09-30"  # obs start 2017-10-01:7am
-# data_root = "/home/jovyan/ngiab_preprocess_output"
 data_root = Path(__file__).parent / "data"
 
 realization_path = f"{data_root}/gage-{gage_id}/config/realization.json"
@@ -25,7 +28,7 @@ troute_output_path = (
     f"{data_root}/gage-{gage_id}/outputs/troute/{get_troute_output_name(realization_path)}"
 )
 data_dir = f"{data_root}/gage-{gage_id}"
-tensorboard_logdir = Path(f"~/logs/{gage_id}").expanduser()  # TensorBoard logs location
+tensorboard_logdir = Path("~/logs/").expanduser()  # TensorBoard logs location
 
 # Optional: Retrieve and save observed flow
 if not Path(observed_flow_path).exists():
@@ -43,6 +46,7 @@ best_params = run_spotpy(
     objective_function="KGE",
     repetitions=6,
     dds_trials=1,
+    seed=400,
     tensorboard_logdir=tensorboard_logdir,  # Add TensorBoard logging
 )
 
