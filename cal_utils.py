@@ -5,9 +5,6 @@ import subprocess
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
-np.random.seed(400)
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -18,13 +15,6 @@ from spotpy.parameter import Uniform
 from tensorboardX import SummaryWriter
 
 from ngen_utils import create_partitions, get_feature_id
-from plots import (
-    create_interactive_plots,
-    plot_bestmodelrun,
-    plot_parameter_correlation,
-    plot_parameterInteraction,
-    plot_parametertrace,
-)
 
 IS_2I2C = "jovyan" in f"{Path('~').expanduser()}"
 
@@ -86,40 +76,32 @@ class NextGenSetup:
         self.realization_path = Path(data_dir) / "config" / "realization.json"
 
     def write_config(self, params):
-        param_map = {
-            "b": params[0],
-            "satpsi": params[1],
-            "satdk": params[2],
-            "maxsmc": params[3],
-            "refkdt": params[4],
-            "expon": params[5],
-            "slope": params[6],
-            "max_gw_storage": params[7],
-            "Kn": params[8],
-            "Klf": params[9],
-            "Cgw": params[10],
-        }
+        cfe_params = {}
+        noah_params = {}
+        # first 10 parameters are CFE model parameters
+        for i in range(len(params)):
+            if i <= 10:
+                cfe_params[params.name[i]] = params[i]
+            else:
+                noah_params[params.name[i]] = params[i]
+        update_parameters(self.realization_path, cfe_params, "CFE")
+        update_parameters(self.realization_path, noah_params, "NoahOWP")
 
-        update_parameters(self.realization_path, param_map, "CFE")
-
-        # Create updated NOAH parameters dictionary
-        noah_param_updates = {
-            "MFSNO": params[11],  # Pass float directly
-            "MP": params[12],
-            "RSURF_EXP": params[13],
-            "CWP": params[14],
-            "VCMX25": params[15],
-            "RSURF_SNOW": params[16],
-            "SCAMAX": params[17],
-        }
-
-        update_parameters(self.realization_path, noah_param_updates, "NoahOWP")
+    def run_quiet(self, command, executable="/bin/sh"):
+        subprocess.run(
+            command,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            executable=executable,
+        )
 
     def run_model(self, data_dir):
         troute_output_folder = Path(data_dir) / "outputs" / "troute"
         for file in troute_output_folder.glob("*.nc"):
             file.unlink()
 
+        RUST = False
         if IS_2I2C:
             gpkg_name = f"{Path(data_dir).stem}_subset.gpkg"
             num_partitions = create_partitions(
@@ -133,9 +115,14 @@ class NextGenSetup:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
+        elif RUST:
+            self.run_quiet("bmi-driver {Path(data_dir).absolute()}")
+            self.run_quiet(f"rs-route {Path(data_dir).absolute()}")
+
         else:
-            command = f'docker run -it -v "{data_dir}:/ngen/ngen/data" awiciroh/ngiab /ngen/ngen/data/ auto {mp.cpu_count()} local'
-            subprocess.run(command, shell=True, stdout=subprocess.DEVNULL)
+            self.run_quiet(
+                f'docker run -it -v "{Path(data_dir).absolute()}:/ngen/ngen/data" awiciroh/ngiab /ngen/ngen/data/ auto {mp.cpu_count()} local'
+            )
 
     def evaluate(self, feature_id):
         ds = xr.open_dataset(self.troute_output_path)
@@ -148,8 +135,9 @@ class NextGenSetup:
 
 # === SPOTPY Setup Class for Calibration with TensorBoard ===
 class SpotpySetup:
+    ## These have to match the names in the model_params dictionary
     # CFE model parameters
-    soil_params_b = Uniform(2.0, 15.0, optguess=4.05)
+    b = Uniform(2.0, 15.0, optguess=4.05)  # soil parameter b
     satpsi = Uniform(0.03, 0.955, optguess=0.355)
     satdk = Uniform(0.0000001, 0.000726, optguess=0.00000338)
     maxsmc = Uniform(0.16, 0.59, optguess=0.439)
@@ -157,11 +145,11 @@ class SpotpySetup:
     expon = Uniform(1.0, 8.0, optguess=3.0)
     slope = Uniform(0.0, 1.0, optguess=0.1)
     max_gw_storage = Uniform(0.01, 0.25, optguess=0.05)
-    K_nash_subsurface = Uniform(0.0, 1.0, optguess=0.03)
-    K_lf = Uniform(0.0, 1.0, optguess=0.01)
+    Kn = Uniform(0.0, 1.0, optguess=0.03)  # K_nash_subsurface
+    Klf = Uniform(0.0, 1.0, optguess=0.01)
     Cgw = Uniform(0.0000018, 0.0018, optguess=0.000018)
 
-    # # Additional NOAH OWP Modular parameters
+    # Additional NOAH OWP Modular parameters
     MFSNO = Uniform(0.5, 4.0, optguess=2.0)  # multiplier on snowfall melt factor
     MP = Uniform(3.6, 12.6, optguess=9.0)
     RSURF_EXP = Uniform(1.0, 6.0, optguess=5.0)
@@ -189,28 +177,6 @@ class SpotpySetup:
         self.run_id = 0
         self.writer = writer
         self.best_objective = float("inf") if not invert_objective else float("-inf")
-
-        # Get parameter names for logging
-        self.param_names = [
-            "soil_params_b",
-            "satpsi",
-            "satdk",
-            "maxsmc",
-            "refkdt",
-            "expon",
-            "slope",
-            "max_gw_storage",
-            "K_nash_subsurface",
-            "K_lf",
-            "Cgw",
-            "MFSNO",
-            "MP",
-            "RSURF_EXP",
-            "CWP",
-            "VCMX25",
-            "RSURF_SNOW",
-            "SCAMAX",
-        ]
 
         # Ensure spotpy directory exists
         self.output_dir = f"{data_dir}/spotpy"
@@ -259,71 +225,37 @@ class SpotpySetup:
             self.writer.add_scalar("Metrics/Correlation", correlation, self.run_id)
 
             # Log parameters
-            for i, param_name in enumerate(self.param_names):
-                if i < len(self.current_params):
-                    self.writer.add_scalar(
-                        f"Parameters/{param_name}", self.current_params[i], self.run_id
-                    )
-                    start_date = self.model.training_start_date
-                    # Log hydrographs periodically (every 10 iterations)
-                    if self.run_id % 10 == 0:
-                        # Create hourly date range
-                        dates = pd.date_range(start=start_date, periods=len(evaluation), freq="h")
+            for i in range(len(self.current_params)):
+                self.writer.add_scalar(
+                    f"Parameters/{self.current_params.name[i]}", self.current_params[i], self.run_id
+                )
+                start_date = self.model.training_start_date
+                # Log hydrographs periodically (every 10 iterations)
+                if self.run_id % 10 == 0:
+                    # Create hourly date range
+                    dates = pd.date_range(start=start_date, periods=len(evaluation), freq="h")
 
-                        fig, ax = plt.subplots(figsize=(12, 6))
-                        ax.plot(dates, evaluation, label="Observed", color="black", linewidth=1.5)
-                        ax.plot(dates, simulation, label="Simulated", linestyle="--", alpha=0.8)
-                        ax.legend()
-                        ax.set_title(f"Iteration {self.run_id} - KGE {kge:.4f}")
-                        ax.set_xlabel("Date")
-                        ax.set_ylabel("Streamflow [m3/sec]")
-                        ax.grid(True, alpha=0.3)
+                    fig, ax = plt.subplots(figsize=(12, 6))
+                    ax.plot(dates, evaluation, label="Observed", color="black", linewidth=1.5)
+                    ax.plot(dates, simulation, label="Simulated", linestyle="--", alpha=0.8)
+                    ax.legend()
+                    ax.set_title(f"Iteration {self.run_id} - KGE {kge:.4f}")
+                    ax.set_xlabel("Date")
+                    ax.set_ylabel("Streamflow [m3/sec]")
+                    ax.grid(True, alpha=0.3)
 
-                        # Format x-axis dates
-                        import matplotlib.dates as mdates
+                    # Format x-axis dates
+                    import matplotlib.dates as mdates
 
-                        ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-                        ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-                        fig.autofmt_xdate()  # Rotate date labels for better readability
+                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
+                    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+                    fig.autofmt_xdate()  # Rotate date labels for better readability
 
-                        self.writer.add_figure("Hydrographs/Comparison", fig, self.run_id)
-                        plt.close(fig)
-
-                        # Log residuals
-                        residuals = evaluation - simulation
-                        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-
-                        ax1.plot(dates, residuals)
-                        ax1.set_title("Residuals Over Time")
-                        ax1.set_xlabel("Date")
-                        ax1.set_ylabel("Residual [m3/sec]")
-                        ax1.grid(True, alpha=0.3)
-                        ax1.axhline(y=0, color="r", linestyle="--", alpha=0.5)
-
-                        # Format x-axis dates for residuals plot
-                        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-                        ax1.xaxis.set_major_locator(mdates.AutoDateLocator())
-
-                        ax2.hist(residuals, bins=30, edgecolor="black")
-                        ax2.set_title("Residual Distribution")
-                        ax2.set_xlabel("Residual [m3/sec]")
-                        ax2.set_ylabel("Frequency")
-                        ax2.grid(True, alpha=0.3)
-
-                        fig.autofmt_xdate()  # Rotate date labels
-                        self.writer.add_figure("Residuals/Analysis", fig, self.run_id)
-                        plt.close(fig)
+                    self.writer.add_figure("Hydrographs/Comparison", fig, self.run_id)
+                    plt.close(fig)
 
         self.run_id += 1
         return objective_metric
-
-
-def plot_results(results, observation_data, output_dir):
-    plot_parametertrace(results, output_dir)
-    plot_parameterInteraction(results, output_dir)
-    plot_bestmodelrun(results, observation_data, output_dir)
-    plot_parameter_correlation(results, output_dir)
-    create_interactive_plots(results, observation_data, output_dir)
 
 
 # === Function to Run SPOTPY Calibration with TensorBoard ===
@@ -373,17 +305,11 @@ def run_spotpy(
     run_name = f"{gage_id}_{algorithm}_{objective_function}_{datetime.now().strftime('%H_%M')}"
     writer = SummaryWriter(log_dir=f"{tensorboard_logdir}/{run_name}")
 
-    # Log hyperparameters
-    hparams = {
-        "algorithm": algorithm,
-        "objective_function": objective_function,
-        "repetitions": repetitions,
-        "gage_id": gage_id,
-        "start_date": str(start_date),
-        "end_date": str(end_date),
-    }
-    if algorithm == "DDS":
-        hparams["dds_trials"] = dds_trials
+    print(f"\nTensorBoard logs will be saved to: {tensorboard_logdir}/{run_name}")
+    if IS_2I2C:
+        print("Open the Tensorboard from the launcher to view logs in realtime")
+    else:
+        print(f"Run 'tensorboard --logdir={tensorboard_logdir}' to view progress")
 
     feature_id = get_feature_id(
         Path(data_dir) / "config" / f"{Path(data_dir).stem}_subset.gpkg", gage_id
@@ -406,18 +332,9 @@ def run_spotpy(
 
     # Final results to TensorBoard
     best_params = spotpy.analyser.get_best_parameterset(results, maximize=best_is_higher)
-    # Log final best parameters
-    for i, param_name in enumerate(optimizer.param_names):
-        if i < len(best_params[0]):
-            writer.add_scalar(f"FinalBestParameters/{param_name}", best_params[0][i], 0)
 
     # Close TensorBoard writer
     writer.close()
-
-    # Generate standard plots
-    # plot_results(results, optimizer.evaluation(), f"{data_dir}/spotpy/plots")
-
-    print(f"\nTensorBoard logs saved to: {tensorboard_logdir}/{run_name}")
-    print(f"Run 'tensorboard --logdir={tensorboard_logdir}' to view results")
+    print(f"Run {run_name} finished, use 'tensorboard --logdir={tensorboard_logdir}' to view")
 
     return best_params

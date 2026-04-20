@@ -2,11 +2,7 @@ import json
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
-
 from cal_utils import process_usgs_streamflow, run_spotpy
-
-np.random.seed(400)
 
 
 def get_troute_output_name(path):
@@ -44,9 +40,8 @@ best_params = run_spotpy(
     data_dir,
     algorithm="DDS",
     objective_function="KGE",
-    repetitions=6,
+    repetitions=10,
     dds_trials=1,
-    seed=400,
     tensorboard_logdir=tensorboard_logdir,  # Add TensorBoard logging
 )
 
