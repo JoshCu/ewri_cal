@@ -1,8 +1,8 @@
-import json
 import multiprocessing as mp
-import os
 import subprocess
+from collections.abc import Callable
 from datetime import datetime
+from functools import cache
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,130 +10,15 @@ import numpy as np
 import pandas as pd
 import spotpy
 import xarray as xr
-from dataretrieval import nwis
 from spotpy.parameter import Uniform
 from tensorboardX import SummaryWriter
 
-from ngen_utils import create_partitions, get_feature_id
+from ngen_utils import create_partitions, get_feature_id, write_to_realization
+from utils import get_usgs_streamflow
 
 IS_2I2C = "jovyan" in f"{Path('~').expanduser()}"
 
 
-def update_parameters(file_path, param_updates, model_type_name):
-    with open(file_path, "r") as f:
-        realization = json.load(f)
-    models = realization["global"]["formulations"][0]["params"]["modules"]
-    for model in models:
-        if model["params"]["model_type_name"] == model_type_name:
-            model["params"]["model_params"] = param_updates
-            break
-    with open(file_path, "w") as f:
-        json.dump(realization, f, indent=4)
-
-
-# === Utility Function to Retrieve and Preprocess USGS Streamflow ===
-def process_usgs_streamflow(site, start, end, output_path=None):
-    start = pd.to_datetime(start) - pd.Timedelta(days=1)
-    end = pd.to_datetime(end) + pd.Timedelta(days=1)
-    adjusted_start = start.strftime("%Y-%m-%d")
-    adjusted_end = end.strftime("%Y-%m-%d")
-
-    dfo_usgs = nwis.get_record(sites=site, service="iv", start=adjusted_start, end=adjusted_end)
-    dfo_usgs.index = pd.to_datetime(dfo_usgs.index)
-    dfo_usgs["Time"] = dfo_usgs.index.floor("h")
-    dfo_usgs["00060"] = pd.to_numeric(dfo_usgs["00060"], errors="coerce")
-    dfo_usgs_hr = dfo_usgs.groupby("Time")["00060"].mean().reset_index()
-    dfo_usgs_hr["values"] = dfo_usgs_hr["00060"] / 35.3147
-    dfo_usgs_hr = dfo_usgs_hr[["Time", "values"]]
-    if output_path:
-        dfo_usgs_hr.to_pickle(output_path)
-    return dfo_usgs_hr
-
-
-# === Wrapper to Set Up NextGen Model Execution ===
-class NextGenSetup:
-    def __init__(
-        self,
-        gage_id,
-        start_date,
-        end_date,
-        training_start_date,
-        observed_flow_path,
-        troute_output_path,
-        data_dir,
-    ):
-        self.gage_id = gage_id
-        self.training_start_date = pd.to_datetime(training_start_date)
-        self.end_date = pd.to_datetime(end_date)
-        self.observed = pd.read_pickle(observed_flow_path)
-        self.observed["Time"] = pd.to_datetime(self.observed["Time"]).dt.tz_localize(None)
-        self.observed = self.observed[
-            (self.observed["Time"] >= self.training_start_date)
-            & (self.observed["Time"] <= self.end_date)
-        ]
-        self.observed = self.observed.set_index("Time")
-        self.troute_output_path = troute_output_path
-        self.realization_path = Path(data_dir) / "config" / "realization.json"
-
-    def write_config(self, params):
-        cfe_params = {}
-        noah_params = {}
-        # first 10 parameters are CFE model parameters
-        for i in range(len(params)):
-            if i <= 10:
-                cfe_params[params.name[i]] = params[i]
-            else:
-                noah_params[params.name[i]] = params[i]
-        update_parameters(self.realization_path, cfe_params, "CFE")
-        update_parameters(self.realization_path, noah_params, "NoahOWP")
-
-    def run_quiet(self, command, executable="/bin/sh"):
-        subprocess.run(
-            command,
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            executable=executable,
-        )
-
-    def run_model(self, data_dir):
-        troute_output_folder = Path(data_dir) / "outputs" / "troute"
-        for file in troute_output_folder.glob("*.nc"):
-            file.unlink()
-
-        RUST = False
-        if IS_2I2C:
-            gpkg_name = f"{Path(data_dir).stem}_subset.gpkg"
-            num_partitions = create_partitions(
-                Path(data_dir) / "config" / gpkg_name, output_folder=data_dir
-            )
-            command = f"cd {Path(data_dir)} && source /ngen/.venv/bin/activate && mpirun -n {num_partitions} /dmod/bin/ngen-parallel ./config/{gpkg_name} all ./config/{gpkg_name} all ./config/realization.json ./partitions_{num_partitions}.json"
-            subprocess.run(
-                command,
-                shell=True,
-                executable="/bin/bash",
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        elif RUST:
-            self.run_quiet("bmi-driver {Path(data_dir).absolute()}")
-            self.run_quiet(f"rs-route {Path(data_dir).absolute()}")
-
-        else:
-            self.run_quiet(
-                f'docker run -it -v "{Path(data_dir).absolute()}:/ngen/ngen/data" awiciroh/ngiab /ngen/ngen/data/ auto {mp.cpu_count()} local'
-            )
-
-    def evaluate(self, feature_id):
-        ds = xr.open_dataset(self.troute_output_path)
-        simulated = ds["flow"].sel(feature_id=feature_id).values
-        actual_start = min(self.training_start_date, self.observed.index[0])
-        simulated = simulated[ds["time"] >= actual_start]
-        simulated = simulated[: len(self.observed) - 1]
-        return simulated
-
-
-# === SPOTPY Setup Class for Calibration with TensorBoard ===
 class SpotpySetup:
     ## These have to match the names in the model_params dictionary
     # CFE model parameters
@@ -160,49 +45,100 @@ class SpotpySetup:
 
     def __init__(
         self,
-        model_setup,
-        data_dir,
-        feature_id,
-        invert_objective,
-        objective_function,
+        data_dir: Path,
+        gage_id: str,
+        feature_id: int,
+        invert_objective: bool,
+        objective_function: Callable,
+        training_start_date: datetime,
+        end_date: datetime,
+        realization: Path | None = None,
         writer=None,
-        objective_function_name=None,
     ):
         self.obj_func = objective_function
-        self.objective_function_name = objective_function_name
         self.invert_objective = invert_objective
-        self.model = model_setup
         self.data_dir = data_dir
         self.feature_id = feature_id
         self.run_id = 0
         self.writer = writer
-        self.best_objective = float("inf") if not invert_objective else float("-inf")
 
-        # Ensure spotpy directory exists
-        self.output_dir = f"{data_dir}/spotpy"
-        os.makedirs(f"{self.output_dir}/plots/iterations", exist_ok=True)
+        obs_save_path = data_dir / "usgs_streamflow.pkl"
+        self.observed = get_usgs_streamflow(gage_id, training_start_date, end_date, obs_save_path)
+        self.observed = self.observed[
+            (self.observed["Time"] >= training_start_date) & (self.observed["Time"] <= end_date)
+        ]
+        self.observed = self.observed.set_index("Time")
+        self.training_start_date = min(training_start_date, self.observed.index[0])
+
+        if realization is None:
+            realization = self.data_dir / "config" / "realization.json"
+        self.realization = realization
+
+        self.output_dir = data_dir / "spotpy"
+
+    def _run_quiet(self, command, executable="/bin/sh"):
+        subprocess.run(
+            command,
+            shell=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            executable=executable,
+        )
 
     def simulation(self, vector):
         self.current_params = vector
-        self.model.write_config(vector)
-        self.model.run_model(self.data_dir)
-        return self.model.evaluate(self.feature_id)
+        write_to_realization(self.realization, vector)
+        troute_output_folder = self.data_dir / "outputs" / "troute"
+        for file in troute_output_folder.glob("*.nc"):
+            file.unlink()
 
+        gpkg_name = f"{self.data_dir.stem}_subset.gpkg"
+        RUST = True
+        if IS_2I2C:
+            num_partitions = create_partitions(
+                self.data_dir / "config" / gpkg_name, output_folder=self.data_dir
+            )
+            self._run_quiet(
+                f"""cd {self.data_dir} && source /ngen/.venv/bin/activate && \
+                mpirun -n {num_partitions} /dmod/bin/ngen-parallel \
+                ./config/{gpkg_name} all ./config/{gpkg_name} all \
+                ./config/realization.json \
+                ./partitions_{num_partitions}.json""",
+                executable="/bin/bash",
+            )
+
+        elif RUST:
+            self._run_quiet(f"bmi-driver {self.data_dir.absolute()}")
+            self._run_quiet(f"rs-route {self.data_dir.absolute()}")
+
+        else:
+            self._run_quiet(
+                f'docker run -it -v "{self.data_dir.absolute()}:/ngen/ngen/data" awiciroh/ngiab /ngen/ngen/data/ auto {mp.cpu_count()} local'
+            )
+        troute_output = troute_output_folder.glob("*.nc").__next__()
+        ds = xr.open_dataset(troute_output)
+        simulated = ds["flow"].sel(feature_id=self.feature_id).values
+        simulated = simulated[ds["time"] >= self.training_start_date]
+        simulated = simulated[: len(self.observed) - 1]
+        return simulated
+
+    @cache
     def evaluation(self):
-        return self.model.observed.values.squeeze()[1:]
+        return self.observed.values.squeeze()[1:]
 
     def objectivefunction(self, simulation, evaluation):
         if len(simulation) != len(evaluation):
             raise ValueError("simulation and observation are not equal length")
 
         objective_metric = self.obj_func(evaluation, simulation)
+
         if self.invert_objective:
-            if self.objective_function_name == "KGE":
+            if self.obj_func.__name__ == "kge":
                 objective_metric = 1 - objective_metric
             else:
                 objective_metric = -objective_metric
         else:
-            if self.objective_function_name == "KGE":
+            if self.obj_func.__name__ == "kge":
                 objective_metric = objective_metric - 1
 
         # Calculate additional metrics for TensorBoard
@@ -229,7 +165,7 @@ class SpotpySetup:
                 self.writer.add_scalar(
                     f"Parameters/{self.current_params.name[i]}", self.current_params[i], self.run_id
                 )
-                start_date = self.model.training_start_date
+                start_date = self.training_start_date
                 # Log hydrographs periodically (every 10 iterations)
                 if self.run_id % 10 == 0:
                     # Create hourly date range
@@ -258,32 +194,16 @@ class SpotpySetup:
         return objective_metric
 
 
-# === Function to Run SPOTPY Calibration with TensorBoard ===
 def run_spotpy(
-    gage_id,
-    start_date,
-    end_date,
-    training_start_date,
-    observed_flow_path,
-    troute_output_path,
-    data_dir,
-    algorithm,
-    objective_function,
-    repetitions=25,
-    dds_trials=5,
-    tensorboard_logdir=None,
+    gage_id: str,
+    end_date: datetime,
+    training_start_date: datetime,
+    data_dir: Path,
+    algorithm: str,
+    objective_function: str,
+    repetitions: int = 25,
+    dds_trials: int = 5,
 ):
-    # Model setup
-    model_setup = NextGenSetup(
-        gage_id,
-        start_date,
-        end_date,
-        training_start_date,
-        observed_flow_path,
-        troute_output_path,
-        data_dir,
-    )
-
     if objective_function == "KGE":
         best_is_higher = True
         obj_func = spotpy.objectivefunctions.kge
@@ -298,9 +218,7 @@ def run_spotpy(
 
     invert_objective = best_is_higher != algorithm_maximizes
 
-    # Set up TensorBoard writer
-    if tensorboard_logdir is None:
-        tensorboard_logdir = f"{data_dir}/tensorboard_logs"
+    tensorboard_logdir = Path("~/logs/").expanduser()
 
     run_name = f"{gage_id}_{algorithm}_{objective_function}_{datetime.now().strftime('%H_%M')}"
     writer = SummaryWriter(log_dir=f"{tensorboard_logdir}/{run_name}")
@@ -311,12 +229,19 @@ def run_spotpy(
     else:
         print(f"Run 'tensorboard --logdir={tensorboard_logdir}' to view progress")
 
-    feature_id = get_feature_id(
-        Path(data_dir) / "config" / f"{Path(data_dir).stem}_subset.gpkg", gage_id
-    )
+    feature_id = get_feature_id(data_dir / "config" / f"{data_dir.stem}_subset.gpkg", gage_id)
+
     optimizer = SpotpySetup(
-        model_setup, data_dir, feature_id, invert_objective, obj_func, writer, objective_function
+        data_dir,
+        gage_id,
+        feature_id,
+        invert_objective,
+        obj_func,
+        training_start_date,
+        end_date,
+        writer=writer,
     )
+
     db_name = f"spotpy_db_{gage_id}_{algorithm}_{objective_function}"
 
     # SCE hyperparameters

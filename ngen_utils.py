@@ -2,9 +2,35 @@ import json
 import multiprocessing
 import sqlite3
 from collections import defaultdict
+from datetime import datetime
 from math import ceil
 from pathlib import Path
 from typing import List, Tuple
+
+
+def _update_parameters(file_path: Path, param_updates: dict, model_type_name: str):
+    with open(file_path, "r") as f:
+        realization = json.load(f)
+    models = realization["global"]["formulations"][0]["params"]["modules"]
+    for model in models:
+        if model["params"]["model_type_name"] == model_type_name:
+            model["params"]["model_params"] = param_updates
+            break
+    with open(file_path, "w") as f:
+        json.dump(realization, f, indent=4)
+
+
+def write_to_realization(realization_path: Path, params):
+    cfe_params = {}
+    noah_params = {}
+    # first 10 parameters are CFE model parameters
+    for i in range(len(params)):
+        if i <= 10:
+            cfe_params[params.name[i]] = params[i]
+        else:
+            noah_params[params.name[i]] = params[i]
+    _update_parameters(realization_path, cfe_params, "CFE")
+    _update_parameters(realization_path, noah_params, "NoahOWP")
 
 
 def get_cat_to_nex_flowpairs(hydrofabric: Path) -> List[Tuple]:
@@ -31,6 +57,13 @@ def get_feature_id(hydrofabric: Path, gage_id: str) -> int:
         print(f"SQLite error: {e}")
         raise
     return feature_id
+
+
+def get_troute_output_name(path):
+    with open(path, "r") as file:
+        realization = json.load(file)
+    start_date = datetime.strptime(realization["time"]["start_time"], "%Y-%m-%d %H:%M:%S")
+    return f"troute_output_{start_date.strftime('%Y%m%d%H%M')}.nc"
 
 
 def create_partitions(
