@@ -17,7 +17,7 @@ best_params = run_spotpy(
     data_dir,
     algorithm="DDS",
     objective_function="KGE",
-    repetitions=10,
+    repetitions=20,
     dds_trials=1,
 )
 

@@ -6,10 +6,10 @@ from functools import cache
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import spotpy
 import xarray as xr
+from spotpy.objectivefunctions import calculate_all_functions
 from spotpy.parameter import Uniform
 from tensorboardX import SummaryWriter
 
@@ -87,6 +87,7 @@ class SpotpySetup:
 
     def simulation(self, vector):
         self.current_params = vector
+
         write_to_realization(self.realization, vector)
         troute_output_folder = self.data_dir / "outputs" / "troute"
         for file in troute_output_folder.glob("*.nc"):
@@ -132,39 +133,31 @@ class SpotpySetup:
 
         objective_metric = self.obj_func(evaluation, simulation)
 
-        if self.invert_objective:
-            if self.obj_func.__name__ == "kge":
-                objective_metric = 1 - objective_metric
-            else:
-                objective_metric = -objective_metric
-        else:
-            if self.obj_func.__name__ == "kge":
-                objective_metric = objective_metric - 1
+        if self.obj_func.__name__ == "kge":
+            objective_metric = objective_metric - 1
 
-        # Calculate additional metrics for TensorBoard
-        rmse = spotpy.objectivefunctions.rmse(evaluation, simulation)
+        if self.invert_objective:
+            objective_metric = -objective_metric
+
         kge = spotpy.objectivefunctions.kge(evaluation, simulation)
-        mae = np.mean(np.abs(evaluation - simulation))
-        nse = 1 - (
-            np.sum((evaluation - simulation) ** 2) / np.sum((evaluation - np.mean(evaluation)) ** 2)
-        )
-        correlation = np.corrcoef(evaluation, simulation)[0, 1]
 
         # Log to TensorBoard if writer is available
         if self.writer:
             # Log objective function value
             self.writer.add_scalar("Metrics/Objective_Function", objective_metric, self.run_id)
-            self.writer.add_scalar("Metrics/MAE", mae, self.run_id)
-            self.writer.add_scalar("Metrics/KGE", kge, self.run_id)
-            self.writer.add_scalar("Metrics/NSE", nse, self.run_id)
-            self.writer.add_scalar("Metrics/RMSE", rmse, self.run_id)
-            self.writer.add_scalar("Metrics/Correlation", correlation, self.run_id)
+            for name, value in calculate_all_functions(evaluation, simulation):
+                self.writer.add_scalar(f"Metrics/{name}", value, self.run_id)
+                if name == "kge":
+                    kge = value
 
             # Log parameters
             for i in range(len(self.current_params)):
                 self.writer.add_scalar(
-                    f"Parameters/{self.current_params.name[i]}", self.current_params[i], self.run_id
+                    f"Parameters/{self.current_params.name[i]}",
+                    self.current_params[i],
+                    self.run_id,
                 )
+
                 start_date = self.training_start_date
                 # Log hydrographs periodically (every 10 iterations)
                 if self.run_id % 10 == 0:
