@@ -5,12 +5,12 @@ from datetime import datetime
 from functools import cache
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import pandas as pd
 import spotpy
 import xarray as xr
 from spotpy.objectivefunctions import calculate_all_functions
 from spotpy.parameter import Uniform
+from tensorboard_plugin_hydrograph import add_hydrograph
 from tensorboardX import SummaryWriter
 
 from ngen_utils import create_partitions, get_feature_id, write_to_realization
@@ -52,8 +52,8 @@ class SpotpySetup:
         objective_function: Callable,
         training_start_date: datetime,
         end_date: datetime,
+        writer: SummaryWriter,
         realization: Path | None = None,
-        writer=None,
     ):
         self.obj_func = objective_function
         self.invert_objective = invert_objective
@@ -141,48 +141,32 @@ class SpotpySetup:
 
         kge = spotpy.objectivefunctions.kge(evaluation, simulation)
 
-        # Log to TensorBoard if writer is available
-        if self.writer:
-            # Log objective function value
-            self.writer.add_scalar("Metrics/Objective_Function", objective_metric, self.run_id)
-            for name, value in calculate_all_functions(evaluation, simulation):
-                self.writer.add_scalar(f"Metrics/{name}", value, self.run_id)
-                if name == "kge":
-                    kge = value
+        # Log objective function value
+        self.writer.add_scalar("Metrics/Objective_Function", objective_metric, self.run_id)
+        for name, value in calculate_all_functions(evaluation, simulation):
+            self.writer.add_scalar(f"Metrics/{name}", value, self.run_id)
+            if name == "kge":
+                kge = value
 
-            # Log parameters
-            for i in range(len(self.current_params)):
-                self.writer.add_scalar(
-                    f"Parameters/{self.current_params.name[i]}",
-                    self.current_params[i],
-                    self.run_id,
-                )
+        # Log parameters
+        for i in range(len(self.current_params)):
+            self.writer.add_scalar(
+                f"Parameters/{self.current_params.name[i]}",
+                self.current_params[i],
+                self.run_id,
+            )
 
-                start_date = self.training_start_date
-                # Log hydrographs periodically (every 10 iterations)
-                if self.run_id % 10 == 0:
-                    # Create hourly date range
-                    dates = pd.date_range(start=start_date, periods=len(evaluation), freq="h")
-
-                    fig, ax = plt.subplots(figsize=(12, 6))
-                    ax.plot(dates, evaluation, label="Observed", color="black", linewidth=1.5)
-                    ax.plot(dates, simulation, label="Simulated", linestyle="--", alpha=0.8)
-                    ax.legend()
-                    ax.set_title(f"Iteration {self.run_id} - KGE {kge:.4f}")
-                    ax.set_xlabel("Date")
-                    ax.set_ylabel("Streamflow [m3/sec]")
-                    ax.grid(True, alpha=0.3)
-
-                    # Format x-axis dates
-                    import matplotlib.dates as mdates
-
-                    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d"))
-                    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
-                    fig.autofmt_xdate()  # Rotate date labels for better readability
-
-                    self.writer.add_figure("Hydrographs/Comparison", fig, self.run_id)
-                    plt.close(fig)
-
+        if self.run_id % 10 == 0:
+            dates = pd.date_range(start=self.training_start_date, periods=len(evaluation), freq="h")
+            add_hydrograph(
+                self.writer,
+                tag="Hydrographs/Comparison",
+                dates=dates,
+                observed=evaluation,
+                simulated=simulation,
+                step=self.run_id,
+                metrics={"KGE": kge},
+            )
         self.run_id += 1
         return objective_metric
 
@@ -248,10 +232,8 @@ def run_spotpy(
     results = sampler.getdata()
     # results = spotpy.analyser.load_csv_results(db_name)
 
-    # Final results to TensorBoard
     best_params = spotpy.analyser.get_best_parameterset(results, maximize=best_is_higher)
 
-    # Close TensorBoard writer
     writer.close()
     print(f"Run {run_name} finished, use 'tensorboard --logdir={tensorboard_logdir}' to view")
 
