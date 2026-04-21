@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from cal_utils import run_spotpy
+from calibration import run_spotpy
 
 gage_id = "10154200"
 start_date = pd.to_datetime("2007-10-01")
@@ -10,20 +10,19 @@ end_date = pd.to_datetime("2009-09-30")
 training_start_date = pd.to_datetime("2008-09-30")
 data_dir = Path(__file__).parent / "data" / f"gage-{gage_id}"
 
+# Model parameters can be updated in parameters.py
+
 best_params = run_spotpy(
     gage_id,
-    end_date,
     training_start_date,
+    end_date,
     data_dir,
     algorithm="DDS",
     objective_function="KGE",
-    repetitions=20,
+    repetitions=10,
     dds_trials=1,
+    save_trials=True,
 )
 
-# save the best parameters to a file
-with open(f"{data_dir}/spotpy/best_params.csv", "w") as file:
-    header = ",".join([name[3:] for name in best_params[0].dtype.names])
-    file.write(header + "\n")
-    values = ",".join([str(value) for value in best_params[0]])
-    file.write(values + "\n")
+best = pd.DataFrame(best_params).rename(columns=lambda c: c.removeprefix("par"))
+best.to_csv(data_dir / "spotpy" / "best_params.csv", index=False)

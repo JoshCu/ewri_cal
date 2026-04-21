@@ -26,6 +26,7 @@ dependencies = [
     { name = "seaborn" },
     { name = "spotpy" },
     { name = "tensorboard" },
+    { name = "tensorboard-plugin-hydrograph" },
     { name = "tensorboardx" },
     { name = "xarray" },
 ]
@@ -42,6 +43,7 @@ requires-dist = [
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "spotpy", specifier = ">=1.6.6" },
     { name = "tensorboard", specifier = ">=2.20.0" },
+    { name = "tensorboard-plugin-hydrograph", specifier = ">=0.1.1" },
     { name = "tensorboardx", specifier = ">=2.6.4" },
     { name = "xarray", specifier = ">=2025.8.0" },
 ]
@@ -632,6 +634,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/7a/13/e503968fefabd4c6b2650af21e110aa8466fe21432cd7c43a84577a89438/tensorboard_data_server-0.7.2-py3-none-any.whl", hash = "sha256:7e0610d205889588983836ec05dc098e80f97b7e7bbff7e994ebb78f578d0ddb", size = 2356, upload-time = "2023-10-23T21:23:32.16Z" },
     { url = "https://files.pythonhosted.org/packages/b7/85/dabeaf902892922777492e1d253bb7e1264cadce3cea932f7ff599e53fea/tensorboard_data_server-0.7.2-py3-none-macosx_10_9_x86_64.whl", hash = "sha256:9fe5d24221b29625dbc7328b0436ca7fc1c23de4acf4d272f1180856e32f9f60", size = 4823598, upload-time = "2023-10-23T21:23:33.714Z" },
     { url = "https://files.pythonhosted.org/packages/73/c6/825dab04195756cf8ff2e12698f22513b3db2f64925bdd41671bfb33aaa5/tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl", hash = "sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530", size = 6590363, upload-time = "2023-10-23T21:23:35.583Z" },
+]
+
+[[package]]
+name = "tensorboard-plugin-hydrograph"
+version = "0.1.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "tensorboard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/4b/71/7d18e8ce846466ad80b7656ea09ad2aada72430eebc6bea181bfbb2b2555/tensorboard_plugin_hydrograph-0.1.1.tar.gz", hash = "sha256:94e494a4412b65635e6cb0345d524500bdc4663fb681bda6a25d4c0785cbbe77", size = 1335669, upload-time = "2026-04-21T21:44:19.969Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ba/cf/27d8ce564a84295817d930072a7ee039140a9f045ff5cff7dcdadab5cb67/tensorboard_plugin_hydrograph-0.1.1-py3-none-any.whl", hash = "sha256:a98e715c5d656d5f0ae03528689ca595baf326228fcb8aac062423681269149d", size = 1341652, upload-time = "2026-04-21T21:44:12.8Z" },
 ]
 
 [[package]]
