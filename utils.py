@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import List, Tuple
 
 import pandas as pd
+import yaml
 from dataretrieval import nwis
 from spotpy.parameter import ParameterSet
 
@@ -62,17 +63,48 @@ def _update_parameters(file_path: Path, param_updates: dict, model_type_name: st
 
 
 def update_end_date(realization_path: Path, end_date: str):
-    """Update the end date in the realization file."""
+    """Update the end date in the realization file and t-route config."""
     with open(realization_path, "r") as f:
         realization = json.load(f)
-    # if original_end_date is not set, set it to the current end_date
+
+    # preserve original_end_time on first update
     realization["time"]["original_end_time"] = realization["time"].get(
         "original_end_time", realization["time"]["end_time"]
     )
-    # update the end_date to the new value
+    start_time = realization["time"]["start_time"]
     realization["time"]["end_time"] = end_date
+
     with open(realization_path, "w") as f:
         json.dump(realization, f, indent=4)
+
+    # update t-route config
+    troute_rel_path = realization["routing"]["t_route_config_file_with_path"]
+    troute_path = (realization_path.parent.parent / troute_rel_path).resolve()
+    update_troute_end_date(troute_path, start_time, end_date)
+
+
+def update_troute_end_date(troute_path: Path, start_time: str, end_date: str):
+    """Update nts and max_loop_size in the t-route yaml based on new end_date."""
+    with open(troute_path, "r") as f:
+        troute = yaml.safe_load(f)
+
+    fmt = "%Y-%m-%d %H:%M:%S"
+    start = datetime.strptime(start_time, fmt)
+    end = datetime.strptime(end_date, fmt)
+
+    forcing = troute["compute_parameters"]["forcing_parameters"]
+    time_step_size = forcing["dt"]
+    nts = int((end - start).total_seconds() / time_step_size)
+
+    forcing["nts"] = nts
+    # keep max_loop_size == nts (single output file); preserve if user already split it
+    if forcing.get("max_loop_size") == forcing.get("nts"):
+        forcing["max_loop_size"] = nts
+    else:
+        forcing["max_loop_size"] = nts  # simple case: match nts
+
+    with open(troute_path, "w") as f:
+        yaml.safe_dump(troute, f, sort_keys=False)
 
 
 def write_to_realization(
@@ -230,6 +262,7 @@ def get_usgs_streamflow(
     dfo_usgs_hr["values"] = dfo_usgs_hr["00060"] / 35.3147
     dfo_usgs_hr = dfo_usgs_hr[["Time", "values"]]
     dfo_usgs_hr["Time"] = pd.to_datetime(dfo_usgs_hr["Time"]).dt.tz_localize(None)
+    dfo_usgs_hr["values"] = dfo_usgs_hr["values"].interpolate(method="linear")
     if output_path:
         dfo_usgs_hr.to_pickle(output_path)
         dfo_usgs_hr.to_csv(output_path.with_suffix(".csv"))
