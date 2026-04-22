@@ -3,7 +3,7 @@ import multiprocessing
 import sqlite3
 import subprocess
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from math import ceil
 from multiprocessing import cpu_count
 from pathlib import Path
@@ -11,9 +11,10 @@ from typing import List, Tuple
 
 import pandas as pd
 from dataretrieval import nwis
+from spotpy.parameter import ParameterSet
 
 
-def _run_quiet(command, executable="/bin/sh"):
+def _run_quiet(command: str, executable: str = "/bin/sh"):
     subprocess.run(
         command,
         shell=True,
@@ -23,7 +24,7 @@ def _run_quiet(command, executable="/bin/sh"):
     )
 
 
-def run_mpi(data_dir):
+def run_ngen_local(data_dir: Path):
     gpkg_name = f"{data_dir.stem}_subset.gpkg"
     num_partitions = create_partitions(data_dir / "config" / gpkg_name, output_folder=data_dir)
     _run_quiet(
@@ -36,12 +37,12 @@ def run_mpi(data_dir):
     )
 
 
-def run_rust(data_dir):
+def run_rust(data_dir: Path):
     _run_quiet(f"bmi-driver {data_dir.absolute()}")
     _run_quiet(f"rs-route {data_dir.absolute()}")
 
 
-def run_docker(data_dir):
+def run_ngen_docker(data_dir: Path):
     _run_quiet(
         f'docker run -it -v "{data_dir.absolute()}:/ngen/ngen/data" '
         f"awiciroh/ngiab /ngen/ngen/data/ auto {cpu_count()} local"
@@ -60,25 +61,14 @@ def _update_parameters(file_path: Path, param_updates: dict, model_type_name: st
         json.dump(realization, f, indent=4)
 
 
-def write_to_realization(realization_path: Path, params, param_models: dict[str, str]):
+def write_to_realization(
+    realization_path: Path, params: ParameterSet, param_models: dict[str, str]
+):
     grouped: dict[str, dict] = defaultdict(dict)
     for name, value in zip(params.name, params):
         grouped[param_models[name]][name] = value
     for model_type_name, values in grouped.items():
         _update_parameters(realization_path, values, model_type_name)
-
-
-def get_cat_to_nex_flowpairs(hydrofabric: Path) -> List[Tuple]:
-    sql_query = "SELECT divide_id, toid FROM divides"
-    try:
-        con = sqlite3.connect(str(hydrofabric.absolute()))
-        edges = con.execute(sql_query).fetchall()
-        con.close()
-    except sqlite3.Error as e:
-        print(f"SQLite error: {e}")
-        raise
-    unique_edges = list(set(edges))
-    return unique_edges
 
 
 def get_feature_id(hydrofabric: Path, gage_id: str) -> int:
@@ -94,15 +84,21 @@ def get_feature_id(hydrofabric: Path, gage_id: str) -> int:
     return feature_id
 
 
-def get_troute_output_name(path):
-    with open(path, "r") as file:
-        realization = json.load(file)
-    start_date = datetime.strptime(realization["time"]["start_time"], "%Y-%m-%d %H:%M:%S")
-    return f"troute_output_{start_date.strftime('%Y%m%d%H%M')}.nc"
+def get_cat_to_nex_flowpairs(hydrofabric: Path) -> List[Tuple]:
+    sql_query = "SELECT divide_id, toid FROM divides"
+    try:
+        con = sqlite3.connect(str(hydrofabric.absolute()))
+        edges = con.execute(sql_query).fetchall()
+        con.close()
+    except sqlite3.Error as e:
+        print(f"SQLite error: {e}")
+        raise
+    unique_edges = list(set(edges))
+    return unique_edges
 
 
 def create_partitions(
-    geopackage_path: Path, num_partitions: int = None, output_folder: Path = None
+    geopackage_path: Path, num_partitions: int | None = None, output_folder: Path | None = None
 ) -> int:
     """
     The partitioning algorithm is as follows:
@@ -204,19 +200,17 @@ def rust_installed() -> bool:
 
 def get_usgs_streamflow(
     site: str, start: datetime, end: datetime, output_path: Path
-) -> pd.DataFrame:
+) -> pd.DataFrame | pd.Series:
     if output_path.exists():
         dfo_usgs_hr = pd.read_pickle(output_path)
         return dfo_usgs_hr
 
-    adjusted_start = start - pd.Timedelta(days=1)
-    adjusted_end = end + pd.Timedelta(days=1)
-    adjusted_start = adjusted_start.strftime("%Y-%m-%d")
-    adjusted_end = adjusted_end.strftime("%Y-%m-%d")
+    adjusted_start = (start - timedelta(days=1)).strftime("%Y-%m-%d")
+    adjusted_end = (end + timedelta(days=1)).strftime("%Y-%m-%d")
 
     dfo_usgs = nwis.get_record(sites=site, service="iv", start=adjusted_start, end=adjusted_end)
-    dfo_usgs.index = pd.to_datetime(dfo_usgs.index)
-    dfo_usgs["Time"] = dfo_usgs.index.floor("h")
+    dfo_usgs.index = pd.DatetimeIndex(dfo_usgs.index)
+    dfo_usgs["Time"] = dfo_usgs.index.floor("h")  # type: ignore
     dfo_usgs["00060"] = pd.to_numeric(dfo_usgs["00060"], errors="coerce")
     dfo_usgs_hr = dfo_usgs.groupby("Time")["00060"].mean().reset_index()
     dfo_usgs_hr["values"] = dfo_usgs_hr["00060"] / 35.3147
