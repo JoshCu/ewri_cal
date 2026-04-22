@@ -12,7 +12,6 @@ from spotpy.objectivefunctions import calculate_all_functions
 from spotpy.parameter import ParameterSet
 from tensorboardX import SummaryWriter
 
-from parameters import CFE_PARAMS, NOAH_PARAMS, PARAM_MODELS
 from utils import (
     get_feature_id,
     get_usgs_streamflow,
@@ -53,6 +52,7 @@ class SpotpySetup:
         invert_objective: bool,
         objective_function: FunctionType,  # A function that is passed in like a variable
         writer: SummaryWriter,
+        param_to_model: dict[str, str] = {},
         realization: Path | None = None,
         hydrograph_frequency: int = 10,
     ):
@@ -66,6 +66,7 @@ class SpotpySetup:
         self.run_id = 0
         self.writer = writer
         self.hydrograph_frequency = hydrograph_frequency
+        self.param_to_model = param_to_model
 
         self.output_dir = data_dir / "spotpy"
         self.output_dir.mkdir(exist_ok=True)
@@ -107,7 +108,7 @@ class SpotpySetup:
         self.current_params = vector
 
         # Update the realization with the new parameter values
-        write_to_realization(self.realization, vector, PARAM_MODELS)
+        write_to_realization(self.realization, vector, self.param_to_model)
 
         # Remove any existing TRoute output files before running the model
         # This step ensures that we're not reading a previous iteration's output if the simulation fails
@@ -201,19 +202,6 @@ class SpotpySetup:
             )
 
 
-# Register calibration parameters on SpotpySetup. Keeping the registry in
-# CFE_PARAMS / NOAH_PARAMS ensures write_to_realization groups the same set.
-for _name, _param in {**CFE_PARAMS, **NOAH_PARAMS}.items():
-    setattr(SpotpySetup, _name, _param)
-# This is equivalent to
-# class SpotpySetup:
-#     b = Uniform(2.0, 15.0, optguess=4.05),
-#     satpsi = Uniform(0.03, 0.955, optguess=0.355),
-#     ...
-#     def __init__(...):
-#         ...
-
-
 def run_spotpy(
     gage_id: str,
     training_start_date: datetime,
@@ -221,6 +209,7 @@ def run_spotpy(
     data_dir: Path,
     algorithm: str,
     objective_function: str,
+    calibration_params: dict,
     repetitions: int = 25,
     dds_trials: int = 5,
     save_trials: bool = False,
@@ -273,6 +262,23 @@ def run_spotpy(
         dbformat = "ram"
         save_sim = False
 
+    # Turn the calibration_params into a Model name : Parameter name mapping
+    param_to_model = {name: model for model, names in calibration_params.items() for name in names}
+
+    # Add spotpy parameters to the optimizer so spotpy can sample them.
+    # Doing it like this makes it easier to change and log parameter values.
+    for model, params in calibration_params.items():
+        for _name, _param in params.items():
+            setattr(SpotpySetup, _name, _param)
+    # The equivalent shown in the spotpy documentation is the following
+    # class SpotpySetup:
+    #     b = Uniform(2.0, 15.0, optguess=4.05),
+    #     satpsi = Uniform(0.03, 0.955, optguess=0.355),
+    #     ...
+    #     def __init__(...):
+    #         ...
+    #
+
     optimizer = SpotpySetup(
         gage_id,
         training_start_date,
@@ -281,6 +287,7 @@ def run_spotpy(
         invert_objective,
         obj_func,
         writer=writer,
+        param_to_model=param_to_model,
         hydrograph_frequency=hydrograph_frequency,
     )
 
