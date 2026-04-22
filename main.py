@@ -9,7 +9,10 @@ gage_id = "02450250"
 # start_date = pd.to_datetime("2007-10-01") # start_date set in realization.json
 end_date = pd.to_datetime("2014-09-30")
 training_start_date = pd.to_datetime("2009-09-30")
+
 data_dir = Path(__file__).parent / "data" / f"gage-{gage_id}"
+if not data_dir.exists():
+    data_dir = Path(__file__).parent / "data" / f"EWRI26_USGS_{gage_id}"
 
 # all possible parameters here https://github.com/NOAA-OWP/cfe/blob/a349a953ef239ae7470a8365cf614283d7e6ca80/src/bmi_cfe.c#L2208
 CFE_PARAMS = {
