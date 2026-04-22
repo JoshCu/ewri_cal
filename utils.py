@@ -86,7 +86,7 @@ def write_to_realization(
 
 
 def get_feature_id(hydrofabric: Path, gage_id: str) -> int:
-    sql_query = f"SELECT id FROM 'flowpath-attributes' WHERE gage = {gage_id}"
+    sql_query = f"SELECT id FROM 'flowpath-attributes' WHERE gage = '{gage_id}'"
     try:
         con = sqlite3.connect(str(hydrofabric.absolute()))
         feature_id = con.execute(sql_query).fetchall()[0][0]
