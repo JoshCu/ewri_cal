@@ -66,11 +66,11 @@ def update_end_date(realization_path: Path, end_date: str):
     with open(realization_path, "r") as f:
         realization = json.load(f)
     # if original_end_date is not set, set it to the current end_date
-    realization["time"]["original_end_date"] = realization["time"].get(
-        "original_end_date", realization["time"]["end_date"]
+    realization["time"]["original_end_time"] = realization["time"].get(
+        "original_end_time", realization["time"]["end_time"]
     )
     # update the end_date to the new value
-    realization["time"]["end_date"] = end_date
+    realization["time"]["end_time"] = end_date
     with open(realization_path, "w") as f:
         json.dump(realization, f, indent=4)
 
