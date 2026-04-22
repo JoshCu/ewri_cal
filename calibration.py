@@ -19,6 +19,7 @@ from utils import (
     run_ngen_local,
     run_rust,
     rust_installed,
+    update_end_date,
     write_to_realization,
 )
 
@@ -84,6 +85,9 @@ class SpotpySetup:
         if realization is None:
             realization = self.data_dir / "config" / "realization.json"
         self.realization = realization
+        last_date = self.observed.index[-1]
+        # ngen will run until the end_date in realization.json so set it to the last date in the observed data
+        update_end_date(self.realization, f"{last_date}")
 
         # We can't use docker on 2i2c, so use local MPI instead
         self._run_model = run_ngen_local if IS_2I2C else run_ngen_docker

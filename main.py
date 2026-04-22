@@ -5,10 +5,10 @@ from spotpy.parameter import Uniform
 
 from calibration import run_spotpy
 
-gage_id = "10154200"
-start_date = pd.to_datetime("2007-10-01")
-end_date = pd.to_datetime("2009-09-30")
-training_start_date = pd.to_datetime("2008-09-30")
+gage_id = "02450250"
+# start_date = pd.to_datetime("2007-10-01") # start_date set in realization.json
+end_date = pd.to_datetime("2014-09-30")
+training_start_date = pd.to_datetime("2009-09-30")
 data_dir = Path(__file__).parent / "data" / f"gage-{gage_id}"
 
 # all possible parameters here https://github.com/NOAA-OWP/cfe/blob/a349a953ef239ae7470a8365cf614283d7e6ca80/src/bmi_cfe.c#L2208
@@ -53,7 +53,7 @@ best_params = run_spotpy(
     algorithm="DDS",  # script supports DDS, SCE, spotpy supports many more
     objective_function="KGE",  # script supports KGE, RMSE, spotpy supports many more.
     calibration_params=CALIBRATION_PARAMS,
-    repetitions=50,  # for dds, number of times to run the algorithm PER TRIAL
+    repetitions=20,  # for dds, number of times to run the algorithm PER TRIAL
     dds_trials=1,  # number of times to run repetions above. e.g. 5 trials of 10 reps is 50 reps total
     save_trials=True,  # record every spotpy iteration or just the the best parameters
 )

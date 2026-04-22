@@ -61,6 +61,20 @@ def _update_parameters(file_path: Path, param_updates: dict, model_type_name: st
         json.dump(realization, f, indent=4)
 
 
+def update_end_date(realization_path: Path, end_date: str):
+    """Update the end date in the realization file."""
+    with open(realization_path, "r") as f:
+        realization = json.load(f)
+    # if original_end_date is not set, set it to the current end_date
+    realization["time"]["original_end_date"] = realization["time"].get(
+        "original_end_date", realization["time"]["end_date"]
+    )
+    # update the end_date to the new value
+    realization["time"]["end_date"] = end_date
+    with open(realization_path, "w") as f:
+        json.dump(realization, f, indent=4)
+
+
 def write_to_realization(
     realization_path: Path, params: ParameterSet, param_models: dict[str, str]
 ):
