@@ -33,8 +33,10 @@ The 2i2c image ships with this repo at `/ewri_cal/`, dependencies already instal
 Either log into ciroh 2i2c JupyterHub or run it the command below and open http://localhost:8888 in your browser
 
 ```bash
-docker run -p 8888:8888 awiciroh/ewri_cal jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.to
-ken='' --NotebookApp.password=''
+docker run -p 8888:8888 awiciroh/ewri_cal jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''
+# to attach local data add this to the command above
+# update the path left of the colon: to where your data is stored  
+-v "/home/username/data:/ewri_cal/local_data"
 ```
 
 Once on jupyterhub, launch a terminal and run
