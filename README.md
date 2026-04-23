@@ -30,8 +30,15 @@ Pick the environment you're running in:
 
 The 2i2c image ships with this repo at `/ewri_cal/`, dependencies already installed, and all three workshop gages pre-extracted under `data/` (as `EWRI26_USGS_<id>/` — `main.py` picks those up automatically when a `gage-<id>/` folder isn't present). No download step needed.
 
+Either log into ciroh 2i2c JupyterHub or run it the command below and open http://localhost:8888 in your browser
+
 ```bash
-cd /ewri_cal
+docker run -p 8888:8888 awiciroh/ewri_cal jupyter lab --ip=0.0.0.0 --port=8888 --no-browser --allow-root --NotebookApp.to
+ken='' --NotebookApp.password=''
+```
+
+Once on jupyterhub, launch a terminal and run
+```bash
 uv run python main.py
 ```
 
@@ -48,7 +55,7 @@ git clone https://github.com/JoshCu/ewri_cal && cd ewri_cal && uv sync
 # 2. Get an NGIAB data folder (either option works)
 
 #    a) Generate your own for any USGS gage:
-uvx ngiab-prep -i gage-10154200 --start 2007-10-01 --end 2014-10-02 -sfr --output_root data
+uvx ngiab-prep -i gage-10154200 --start 2007-10-01 --end 2014-10-02 -sfr --source aorc --output_root data
 
 #    b) Or grab a pre-built workshop tarball (Provo River, UT — matches main.py defaults):
 mkdir -p data
