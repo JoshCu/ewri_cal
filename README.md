@@ -65,9 +65,7 @@ curl -L https://ciroh-awi-ewri-data.s3.us-east-1.amazonaws.com/EWRI26_USGS_10154
 # 3. Run the calibration
 uv run python main.py
 
-# Tensorboard can be tricky to get working, try this first
-uv tool install -p 3.10 tensorboard==2.16.* --with tensorboard_plugin_hydrograph
-# If that doesn't work try this
+# Tensorboard can be tricky to get working, this is what I needed install it
 uv tool install -p 3.10 tensorboard==2.16.* --with setuptools==80.* --with tensorflow --with numpy==1.* --with tensorboard_plugin_hydrograph --reinstall
 
 # 4. Watch live in a second terminal
